@@ -1,0 +1,5 @@
+# A syntactically invalid term.
+app (abs (x -> x)) (abs (x > x))
+
+# A syntactically valid term.
+app (abs (x -> x)) (abs (x -> x))
