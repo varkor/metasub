@@ -138,7 +138,8 @@ fn main() {
                          .output()
                          .expect("could not compile the term verifier");
     if output.status.success() {
-        println!("Compiled the program at: {}", out_dir.to_string_lossy());
+        println!("Compiled the program at: {}",
+            source_out_dir.with_extension("").to_string_lossy());
     } else {
         println!("Issue encountered while compiling the term verifier:\n{}\n{}",
                  str::from_utf8(&output.stdout).expect("could not convert stdout to a string"),
