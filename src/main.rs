@@ -7,7 +7,7 @@ use std::env;
 use std::fs::File;
 use std::io::prelude::*;
 use std::path::Path;
-use std::process::Command;
+use std::process::{self, Command};
 use std::str::{self, FromStr};
 
 use chrono::DateTime;
@@ -26,22 +26,43 @@ fn main() {
     let mut contents = String::new();
     f.read_to_string(&mut contents).expect("could not read the file");
     let lines = contents.split("\n");
-    let re_line = Regex::new(r"^[a-z]+: \[(\d+, )*\d+\]$").unwrap();
+    let re_op = Regex::new(r"^[a-z]+: \[(\d+, )*\d+\]$").unwrap();
+    let re_varset = Regex::new(r"^V := \{((([a-z]+), )*([a-z]+)?)\}$").unwrap();
     let re_sig = Regex::new(r"^\[((\d+, )*\d+)\]$").unwrap();
     let re_comment = Regex::new(r"^#.*$").unwrap();
+    let mut gen_vars: Option<Vec<String>> = None;
     let ops: Vec<_> = lines.enumerate().filter_map(|(i, s)| {
         let s = s.trim();
         if s.is_empty() || re_comment.is_match(s) {
             return None;
         }
-        assert!(re_line.is_match(s), "incorrect signature format on line {}: {}", i + 1, s);
-        let comps: Vec<_> = s.split(": ").into_iter().collect();
-        let (name, sig) = (comps[0], comps[1]);
-        let sig: Vec<_> = re_sig.replace(sig, "$1")
-                                 .split(", ")
-                                 .map(|x| u8::from_str(x).unwrap())
-                                 .collect();
-        Some((name, sig))
+        if re_op.is_match(s) {
+            let comps: Vec<_> = s.split(": ").into_iter().collect();
+            let (name, sig) = (comps[0], comps[1]);
+            let sig: Vec<_> = re_sig.replace(sig, "$1")
+                                     .split(", ")
+                                     .map(|x| u8::from_str(x).unwrap())
+                                     .collect();
+            Some((name, sig))
+        } else if re_varset.is_match(s) {
+            // TODO: make sure gen_vars doesn't exceed u8 limit
+            if gen_vars.is_none() {
+                let capt = re_varset.captures_iter(s).next().unwrap()[1].to_string();
+                let vars: Vec<String> = capt.split(", ").filter_map(|v| {
+                    if !v.is_empty() {
+                        Some(format!(r#""{}""#, v))
+                    } else {
+                        None
+                    }
+                }).collect();
+                gen_vars = Some(vars);
+                None
+            } else {
+                panic!("declared V twice");
+            }
+        } else {
+            panic!("incorrect signature format on line {}: {}", i + 1, s);
+        }
     }).collect();
     if ops.len() > 9 {
         panic!("binding signatures may only contain up to 9 operators")
@@ -59,6 +80,7 @@ fn main() {
     let re_cmd =
         Regex::new(r"^(\s*).*?/\*\s*\[\[\s*(INSERT:\s*(\w+)|IGNORE)\s*\]\]\s*\*/\s*$").unwrap();
     let mut ignore_on = false;
+    let gen_vars = gen_vars.unwrap_or_else(|| vec![]);
     let output = template.split("\n").filter_map(|line| {
         let matches: Vec<_> = re_cmd.captures_iter(line).into_iter().collect();
         if !matches.is_empty() {
@@ -85,6 +107,9 @@ fn main() {
                                 format!(r#"("{}", vec!{:?}),"#, name, sig)
                             }).collect::<Vec<_>>().join(&format!("\n{}", indentation));
                             return Some(format!("{}{}", indentation, ops_string));
+                        }
+                        "gen_vars" => {
+                            return Some(gen_vars.join(", "));
                         }
                         tag => panic!("unrecognised template INSERT tag: {}", tag)
                     }
@@ -144,5 +169,6 @@ fn main() {
         println!("Issue encountered while compiling the term verifier:\n{}\n{}",
                  str::from_utf8(&output.stdout).expect("could not convert stdout to a string"),
                  str::from_utf8(&output.stderr).expect("could not convert stderr to a string"));
+        process::exit(1);
     }
 }

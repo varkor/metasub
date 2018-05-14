@@ -67,6 +67,8 @@ fn to_camel_case(s: &str) -> String {
 struct CoqGen<'a> {
     name: &'a str,
     ops: &'a Vec<(&'a str, Vec<u8>)>,
+    #[allow(dead_code)]
+    gen_vars: &'a Vec<&'a str>,
 }
 
 impl<'a> CoqGen<'a> {
@@ -267,7 +269,8 @@ impl Debug for ParseError {
             self.s,
             " ".repeat(spaces),
             (if prehint.is_empty() { String::new() } else { " ".to_string() })
-                + &"^".repeat(self.range.1 - self.range.0),
+                + &"^".repeat(self.range.1 - self.range.0)
+                + (if posthint.is_empty() { "" } else { " " }),
             prehint = prehint,
             posthint = posthint,
             start = "\x1b[31;1m",
@@ -323,6 +326,7 @@ struct TermParser<'a> {
     s: String, // current string
     pos: usize, // current position
     ops: &'a Vec<(&'a str, Vec<u8>)>, // valid operations
+    gen_vars: &'a Vec<&'a str>, // list of "global" vars over which the signature is generated
 }
 
 impl<'a> TermParser<'a> {
@@ -349,7 +353,16 @@ impl<'a> TermParser<'a> {
                 if let Some(&(level, offset)) = vars.get(&var) {
                     Ok(Term::Var(level, offset))
                 } else {
-                    panic!("var unbound");
+                    self.pos -= var.len();
+                    let err_hint =
+                        if let Some(ex_var) = vars.iter().next().map(|(v, _)| v) {
+                        format!("maybe you meant `{}`", ex_var)
+                    } else {
+                        "no variables are bound".to_string()
+                    };
+                    Err::<(), ParseError>(self.error_hint(&err_hint))
+                        .or_fail("use of unbound variable");
+                    panic!("guaranteed panic from unbound variable above");
                 }
             } else {
                 Err(e)
@@ -428,6 +441,16 @@ impl<'a> TermParser<'a> {
                 if Regex::new(&format!("^>")).unwrap().is_match(&self.s) {
                     Err::<(), ParseError>(self.error_hint("you probably meant `->`"))
                         .or_fail("unexpected symbol `>`");
+                } if let Ok(var) = self.eat_var() {
+                    self.pos -= var.len();
+                    let err_hint = self.error_hint(
+                        format!("expected only {} argument{}",
+                            binders,
+                            if binders != 1 { 's'.to_string() } else { String::new() })
+                            .as_str()
+                    );
+                    Err::<(), ParseError>(err_hint)
+                        .or_fail("wrong number of binders for arity");
                 } else {
                     eat_arrow.or_fail("didn't find arrow");
                 }
@@ -470,20 +493,27 @@ fn main() {
         }).collect();
     }
 
+    // The operations as a list of (name, binding arities) pairs.
     let ops: Vec<(&str, Vec<u8>)> = vec![
         /* [[INSERT: ops]] */
     ];
+    let gen_vars: Vec<&str> = vec![
+        /* [[INSERT: gen_vars]] */
+    ];
 
-    let coq_gen = CoqGen { name: inferred_name, ops: &ops };
+    let coq_gen = CoqGen { name: inferred_name, ops: &ops, gen_vars: &gen_vars };
 
     let check_term = |term: String| {
         let mut term_parser = TermParser {
             os: term.clone(),
             s: term.clone(),
             pos: 0,
-            ops: &ops
+            ops: &ops,
+            gen_vars: &gen_vars,
         };
-        let vars: HashMap<String, (u8, u8)> = HashMap::new();
+        let vars: HashMap<String, (u8, u8)> = gen_vars.iter().enumerate().map(|(i, v)| {
+            (v.to_string(), (0, i as u8))
+        }).collect();
         let term = term_parser.eat_op(vars, 0).expect("term was not valid!");
         println!("Term was syntactically correct.");
         coq_gen.inductive_term(term)
