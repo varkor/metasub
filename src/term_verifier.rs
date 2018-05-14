@@ -411,7 +411,7 @@ impl<'a> TermParser<'a> {
     }
 
     fn eat_name(&mut self) -> Result<(String, Vec<u8>), ParseError> {
-        let re_name = Regex::new(r"^[a-z][a-z']+").unwrap();
+        let re_name = Regex::new(r"^[a-z][a-z']*").unwrap();
         let s = self.s.clone();
         if let Some(name) = re_name.find(&s) {
             for &(ref on, ref oa) in self.ops {
