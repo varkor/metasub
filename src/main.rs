@@ -26,7 +26,8 @@ fn main() {
     let mut contents = String::new();
     f.read_to_string(&mut contents).expect("could not read the file");
     let lines = contents.split("\n");
-    let re_op = Regex::new(r"^[a-z]+: \[(\d+, )*\d+\]$").unwrap();
+    let re_nbop = Regex::new(r"^[a-z]+: \d+$").unwrap();
+    let re_bop = Regex::new(r"^[a-z]+: \[(\d+, )*\d+\]$").unwrap();
     let re_varset = Regex::new(r"^V := \{((([a-z]+), )*([a-z]+)?)\}$").unwrap();
     let re_sig = Regex::new(r"^\[((\d+, )*\d+)\]$").unwrap();
     let re_comment = Regex::new(r"^#.*$").unwrap();
@@ -36,7 +37,7 @@ fn main() {
         if s.is_empty() || re_comment.is_match(s) {
             return None;
         }
-        if re_op.is_match(s) {
+        if re_bop.is_match(s) {
             let comps: Vec<_> = s.split(": ").into_iter().collect();
             let (name, sig) = (comps[0], comps[1]);
             let sig: Vec<_> = re_sig.replace(sig, "$1")
@@ -44,6 +45,10 @@ fn main() {
                                      .map(|x| u8::from_str(x).unwrap())
                                      .collect();
             Some((name, sig))
+        } else if re_nbop.is_match(s) {
+            let comps: Vec<_> = s.split(": ").into_iter().collect();
+            let (name, sig) = (comps[0], comps[1]);
+            Some((name, vec![0; usize::from_str(sig).unwrap()]))
         } else if re_varset.is_match(s) {
             // TODO: make sure gen_vars doesn't exceed u8 limit
             if gen_vars.is_none() {
