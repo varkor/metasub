@@ -27,9 +27,9 @@ fn main() {
     f.read_to_string(&mut contents).expect("could not read the file");
     let lines = contents.split("\n");
     let re_nbop = Regex::new(r"^[a-z]+: \d+$").unwrap();
-    let re_bop = Regex::new(r"^[a-z]+: \[(\d+, )*\d+\]$").unwrap();
+    let re_bop = Regex::new(r"^[a-z]+: \((\d+, )*\d+\)$").unwrap();
     let re_varset = Regex::new(r"^V := \{((([a-z]+), )*([a-z]+)?)\}$").unwrap();
-    let re_sig = Regex::new(r"^\[((\d+, )*\d+)\]$").unwrap();
+    let re_sig = Regex::new(r"^\(((\d+, )*\d+)\)$").unwrap();
     let re_comment = Regex::new(r"^#.*$").unwrap();
     let mut gen_vars: Option<Vec<String>> = None;
     let ops: Vec<_> = lines.enumerate().filter_map(|(i, s)| {
