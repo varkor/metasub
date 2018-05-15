@@ -3,6 +3,8 @@ extern crate regex;
 
 mod term_verifier;
 
+use term_verifier::CoqGen;
+
 use std::env;
 use std::fs::File;
 use std::io::prelude::*;
@@ -177,4 +179,20 @@ fn main() {
                  str::from_utf8(&output.stderr).expect("could not convert stderr to a string"));
         process::exit(1);
     }
+
+    let coq_gen = CoqGen { name: inferred_name, ops: &ops };
+
+    // Output
+    let output = format!("{}\n", coq_gen.gen_colimit());
+    if false {
+        println!();
+        println!("{}", output);
+    }
+    // Substitution initial algebra file
+    let mut f = File::create(Path::new(&format!("out/{}-initial-algebra", coq_gen.name))
+                     .with_extension("v"))
+                     .expect("could not create the generated Coq initial algebra file");
+    write!(f, "{}", output).expect("could not write to the generated Coq initial algebra file");
+    println!("Generated a construction of the initial algebra at: {}-initial-algebra.v",
+             coq_gen.name);
 }

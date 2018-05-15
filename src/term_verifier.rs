@@ -1,8 +1,5 @@
 /* [[INSERT: header]] */
 
-/* [[IGNORE */
-mod term_verifier {
-/* IGNORE]] */
 extern crate chrono;
 extern crate regex;
 
@@ -64,15 +61,13 @@ fn to_camel_case(s: &str) -> String {
             }).0
 }
 
-struct CoqGen<'a> {
-    name: &'a str,
-    ops: &'a Vec<(&'a str, Vec<u8>)>,
-    #[allow(dead_code)]
-    gen_vars: &'a Vec<&'a str>,
+pub struct CoqGen<'a> {
+    pub name: &'a str,
+    pub ops: &'a Vec<(&'a str, Vec<u8>)>,
 }
 
 impl<'a> CoqGen<'a> {
-    fn gen_colimit(&self) -> String {
+    pub fn gen_colimit(&self) -> String {
         format!("{}{}\n{}", self.comment(), self.header(), self.body())
     }
 
@@ -326,7 +321,6 @@ struct TermParser<'a> {
     s: String, // current string
     pos: usize, // current position
     ops: &'a Vec<(&'a str, Vec<u8>)>, // valid operations
-    gen_vars: &'a Vec<&'a str>, // list of "global" vars over which the signature is generated
 }
 
 impl<'a> TermParser<'a> {
@@ -438,7 +432,8 @@ impl<'a> TermParser<'a> {
         if binders > 0 {
             let eat_arrow = self.eat_str("-> ");
             if let Err(_) = eat_arrow {
-                if Regex::new(&format!("^>")).unwrap().is_match(&self.s) {
+                if Regex::new(&format!("^>")).unwrap().is_match(&self.s) ||
+                   Regex::new(&format!("^-")).unwrap().is_match(&self.s) {
                     Err::<(), ParseError>(self.error_hint("you probably meant `->`"))
                         .or_fail("unexpected symbol `>`");
                 } if let Ok(var) = self.eat_var() {
@@ -501,7 +496,7 @@ fn main() {
         /* [[INSERT: gen_vars]] */
     ];
 
-    let coq_gen = CoqGen { name: inferred_name, ops: &ops, gen_vars: &gen_vars };
+    let coq_gen = CoqGen { name: inferred_name, ops: &ops };
 
     let check_term = |term: String| {
         let mut term_parser = TermParser {
@@ -509,7 +504,6 @@ fn main() {
             s: term.clone(),
             pos: 0,
             ops: &ops,
-            gen_vars: &gen_vars,
         };
         let vars: HashMap<String, (u8, u8)> = gen_vars.iter().enumerate().map(|(i, v)| {
             (v.to_string(), (0, i as u8))
@@ -539,26 +533,12 @@ fn main() {
         }
     }
 
-    // Output
-    let output = format!("{}\n", coq_gen.gen_colimit());
-    if false {
-        println!();
-        println!("{}", output);
-    }
-    // Substitution omega-colimit file
-    let mut f = File::create(Path::new(&format!("out/{}-colimit", coq_gen.name))
-                     .with_extension("v"))
-                     .expect("could not create the generated Coq colimit file");
-    write!(f, "{}", output).expect("could not write to the generated Coq colimit file");
-    println!("Generated a construction of the colimit at: {}-colimit.v", coq_gen.name);
     // Inductive type file
     let output = format!("{}\n", coq_gen.gen_inductive_type(verified_terms));
-    let mut f = File::create(Path::new(&format!("out/{}-indty", coq_gen.name))
+    let mut f = File::create(Path::new(&format!("out/{}-inductive-type", coq_gen.name))
                      .with_extension("v"))
                      .expect("could not create the generated Coq inductive type file");
     write!(f, "{}", output).expect("could not write to the generated Coq inductive type file");
-    println!("Generated a construction of the inductive type at: {}-indty.v", coq_gen.name);
+    println!("Generated a construction of the inductive type at: {}-inductive-type.v",
+             coq_gen.name);
 }
-/* [[IGNORE */
-}
-/* IGNORE]] */
