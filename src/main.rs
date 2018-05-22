@@ -5,6 +5,7 @@ mod term_verifier;
 
 use term_verifier::CoqGen;
 
+use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::prelude::*;
@@ -29,11 +30,13 @@ fn main() {
     f.read_to_string(&mut contents).expect("could not read the file");
     let lines = contents.split("\n");
     let re_nbop = Regex::new(r"^[a-z]+: \d+$").unwrap();
+    let re_mv = Regex::new(r"^[A-Z][A-Z']*: \d+$").unwrap();
     let re_bop = Regex::new(r"^[a-z]+: \((\d+, )*\d+\)$").unwrap();
     let re_varset = Regex::new(r"^V := \{((([a-z]+), )*([a-z]+)?)\}$").unwrap();
     let re_sig = Regex::new(r"^\(((\d+, )*\d+)\)$").unwrap();
     let re_comment = Regex::new(r"^#.*$").unwrap();
     let mut gen_vars: Option<Vec<String>> = None;
+    let mut metavars: HashMap<&str, u8> = HashMap::new();
     let ops: Vec<_> = lines.enumerate().filter_map(|(i, s)| {
         let s = s.trim();
         if s.is_empty() || re_comment.is_match(s) {
@@ -51,6 +54,14 @@ fn main() {
             let comps: Vec<_> = s.split(": ").into_iter().collect();
             let (name, sig) = (comps[0], comps[1]);
             Some((name, vec![0; usize::from_str(sig).unwrap()]))
+        } else if re_mv.is_match(s) {
+            let comps: Vec<_> = s.split(": ").into_iter().collect();
+            let (name, arity) = (comps[0], comps[1]);
+            if metavars.contains_key(name) {
+                panic!("metavariable provided multiple times");
+            }
+            metavars.insert(name, u8::from_str(arity).unwrap());
+            None
         } else if re_varset.is_match(s) {
             // TODO: make sure gen_vars doesn't exceed u8 limit
             if gen_vars.is_none() {
@@ -88,6 +99,13 @@ fn main() {
         Regex::new(r"^(\s*).*?/\*\s*\[\[\s*(INSERT:\s*(\w+)|IGNORE)\s*\]\]\s*\*/\s*$").unwrap();
     let mut ignore_on = false;
     let gen_vars = gen_vars.unwrap_or_else(|| vec![]);
+    let metavars = metavars.into_iter()
+                           .map(|(name, arity)| {
+                               format!("({:?}, vec![{}]),",
+                                       name,
+                                       vec!["0"; arity as usize].join(", "))
+                           })
+                           .collect::<Vec<_>>();
     let output = template.split("\n").filter_map(|line| {
         let matches: Vec<_> = re_cmd.captures_iter(line).into_iter().collect();
         if !matches.is_empty() {
@@ -117,6 +135,9 @@ fn main() {
                         }
                         "gen_vars" => {
                             Some(gen_vars.join(", "))
+                        }
+                        "metavars" => {
+                            Some(metavars.join(&format!("\n{}", indentation)))
                         }
                         tag => panic!("unrecognised template INSERT tag: {}", tag)
                     }
@@ -164,9 +185,9 @@ fn main() {
                             "-L",
                             &format!("dependency={}", deps),
                             "--extern",
-                            &format!("chrono={}/libchrono-23049bb9170c9e20.rlib", deps),
+                            &format!("chrono={}/libchrono-a31d51bb8f8b101c.rlib", deps),
                             "--extern",
-                            &format!("regex={}/libregex-7c0f609d1db7866d.rlib", deps),
+                            &format!("regex={}/libregex-44aa0d49f4a94993.rlib", deps),
                          ])
                          .output()
                          .expect("could not compile the term verifier");
@@ -180,7 +201,7 @@ fn main() {
         process::exit(1);
     }
 
-    let coq_gen = CoqGen { name: inferred_name, ops: &ops };
+    let coq_gen = CoqGen { name: inferred_name, ops: &ops, metavars: &vec![] };
 
     // Output
     let output = format!("{}\n", coq_gen.gen_colimit());
@@ -189,10 +210,10 @@ fn main() {
         println!("{}", output);
     }
     // Substitution initial algebra file
-    let mut f = File::create(Path::new(&format!("out/{}-initial-algebra", coq_gen.name))
+    let mut f = File::create(Path::new(&format!("out/{}-substitution-algebra", coq_gen.name))
                      .with_extension("v"))
-                     .expect("could not create the generated Coq initial algebra file");
-    write!(f, "{}", output).expect("could not write to the generated Coq initial algebra file");
-    println!("Generated a construction of the initial algebra at: {}-initial-algebra.v",
+                     .expect("could not create the generated Coq substitution algebra file");
+    write!(f, "{}", output).expect("could not write to the generated Coq substitution algebra file");
+    println!("Generated a construction of the substitution algebra at: {}-substitution-algebra.v",
              coq_gen.name);
 }

@@ -1,5 +1,9 @@
 # A syntactically invalid term.
-app (abs (x -> x)) (abs (x > x))
+# app (abs (x -> x)) (abs (x > x))
 
 # A syntactically valid term.
 app (abs (x -> x)) (abs (x -> x))
+
+# Syntactically valid terms with metavariables.
+app (abs (x -> M[x, x])) (N[])
+M[N[], N[]]

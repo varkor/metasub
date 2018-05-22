@@ -64,6 +64,7 @@ fn to_camel_case(s: &str) -> String {
 pub struct CoqGen<'a> {
     pub name: &'a str,
     pub ops: &'a Vec<(&'a str, Vec<u8>)>,
+    pub metavars: &'a Vec<(&'a str, Vec<u8>)>,
 }
 
 impl<'a> CoqGen<'a> {
@@ -256,9 +257,10 @@ impl Debug for ParseError {
         };
         let space_offset = !prehint.is_empty() as usize;
         spaces -= prehint.len() + space_offset;
+        let msg = &self.error;
         write!(f,
             "\n{start}{} (L1:{}-{}):{end}\n{}\n{start}{}{prehint}{}{posthint}{end}\n",
-            self.error,
+            msg,
             self.range.0,
             self.range.1,
             self.s,
@@ -274,18 +276,23 @@ impl Debug for ParseError {
 }
 
 trait FailParse<T> {
+    fn with_err_message(self, error: &str) -> Self;
     fn or_fail(self, error: &str) -> T;
 }
 
 impl<T> FailParse<T> for Result<T, ParseError> {
-    fn or_fail(self, error: &str) -> T {
+    fn with_err_message(self, error: &str) -> Self {
         if let Err(ref pe) = self {
             let mut pe = pe.clone();
-            pe.error = error.to_string();
-            Err::<T, _>(pe).expect(error)
+            pe.error = format!("{} | {}", pe.error, error.to_string());
+            Err::<T, _>(pe)
         } else {
-            self.unwrap()
+            self
         }
+    }
+
+    fn or_fail(self, error: &str) -> T {
+        self.with_err_message(error).unwrap()
     }
 }
 
@@ -302,9 +309,23 @@ impl Display for Operation {
     }
 }
 
+struct Metavar {
+    metavar: String,
+    args: Vec<Term>,
+}
+
+impl Display for Metavar {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}[{}]", self.metavar, self.args.iter().map(|arg| {
+            format!("{}", arg)
+        }).collect::<Vec<_>>().join(", "))
+    }
+}
+
 enum Term {
     Var(u8, u8),
-    Op(Operation)
+    Op(Operation),
+    Metavar(Metavar),
 }
 
 impl Display for Term {
@@ -312,7 +333,14 @@ impl Display for Term {
         match self {
             &Term::Var(depth, offset) => write!(f, "var {} {}", depth, offset),
             &Term::Op(ref op) => op.fmt(f),
+            &Term::Metavar(ref mv) => mv.fmt(f),
         }
+    }
+}
+
+impl Debug for Term {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self)
     }
 }
 
@@ -321,14 +349,32 @@ struct TermParser<'a> {
     s: String, // current string
     pos: usize, // current position
     ops: &'a Vec<(&'a str, Vec<u8>)>, // valid operations
+    metavars: &'a Vec<(&'a str, Vec<u8>)>, // metavariables
+}
+
+struct ParseContext {
+    s: String,
+    pos: usize,
 }
 
 impl<'a> TermParser<'a> {
+    fn save_context(&self) -> ParseContext {
+        ParseContext {
+            s: self.s.clone(),
+            pos: self.pos,
+        }
+    }
+
+    fn restore_context(&mut self, ctx: ParseContext) {
+        self.s = ctx.s;
+        self.pos = ctx.pos;
+    }
+
     fn error_hint(&self, hint: &str) -> ParseError {
         ParseError {
             s: self.os.clone(),
             range: (self.pos, self.pos + 1),
-            error: String::new(),
+            error: "<unknown parse error>".to_string(),
             hint: hint.to_string(),
         }
     }
@@ -337,13 +383,48 @@ impl<'a> TermParser<'a> {
         self.error_hint("")
     }
 
+    fn eat_op_or_metavar(&mut self, vars: HashMap<String, (u8, u8)>, level: u8)
+        -> Result<Term, ParseError> {
+        let prev_ctx = self.save_context();
+        let eaten_op = self.eat_op(vars.clone(), level);
+        let after_ctx = self.save_context();
+        if eaten_op.is_err() {
+            self.restore_context(prev_ctx);
+            let eaten_metavar = self.eat_metavar(vars, level);
+            if eaten_metavar.is_ok() {
+                return eaten_metavar;
+            }
+            self.restore_context(after_ctx);
+        }
+        eaten_op
+    }
+
+    fn eat_metavar(&mut self, vars: HashMap<String, (u8, u8)>, level: u8)
+        -> Result<Term, ParseError> {
+        let (name, arity) = self.eat_name(true).with_err_message("couldn't eat metavar name")?;
+        self.eat_str_ignore(r"\[")?;
+        let mut args = vec![];
+        for (i, &num_binders) in arity.iter().enumerate() {
+            args.push(self.eat_argument(false, num_binders, vars.clone(), level)
+                          .with_err_message("didn't find argument")?);
+            if i < arity.len() - 1 {
+                self.eat_str_ignore(", ")?;
+            }
+        }
+        self.eat_str_ignore(r"\]")?;
+        Ok(Term::Metavar(Metavar {
+            metavar: name,
+            args,
+        }))
+    }
+
     fn eat_op(&mut self, vars: HashMap<String, (u8, u8)>, level: u8)
         -> Result<Term, ParseError> {
-        let name_result = self.eat_name();
+        let name_result = self.eat_name(false);
         if let Err(e) = name_result {
             return if vars.len() > 0 {
                 // TODO: Validate var
-                let var = self.eat_var().or_fail("didn't find var");
+                let var = self.eat_var().with_err_message("didn't find var")?;
                 if let Some(&(level, offset)) = vars.get(&var) {
                     Ok(Term::Var(level, offset))
                 } else {
@@ -354,20 +435,19 @@ impl<'a> TermParser<'a> {
                     } else {
                         "no variables are bound".to_string()
                     };
-                    Err::<(), ParseError>(self.error_hint(&err_hint))
-                        .or_fail("use of unbound variable");
-                    panic!("guaranteed panic from unbound variable above");
+                    Err::<Term, ParseError>(self.error_hint(&err_hint))
+                        .with_err_message("use of unbound variable")
                 }
             } else {
                 Err(e)
             }
         }
-        let (name, arity) = name_result.or_fail("couldn't unwrap name_result");
+        let (name, arity) = name_result.with_err_message("couldn't unwrap name_result")?;
         let mut args = vec![];
         for num_binders in arity {
             self.eat_space()?;
-            args.push(self.eat_argument(num_binders, vars.clone(), level)
-                          .or_fail("didn't find argument"));
+            args.push(self.eat_argument(true, num_binders, vars.clone(), level)
+                          .with_err_message("didn't find argument")?);
         }
         Ok(Term::Op(Operation {
             op: name,
@@ -388,27 +468,31 @@ impl<'a> TermParser<'a> {
     }
 
     fn eat_str_ignore(&mut self, s: &str) -> Result<(), ParseError> {
-        self.eat_str(s)?;
+        self.eat_str(s).with_err_message(&format!("couldn't eat `{}`", s))?;
         Ok(())
     }
 
     fn eat_space(&mut self) -> Result<(), ParseError> {
-        self.eat_str_ignore(" ")
+        self.eat_str_ignore(" ").with_err_message("couldn't eat <space>")
     }
 
     fn eat_open(&mut self) -> Result<(), ParseError> {
-        self.eat_str_ignore(r"\(")
+        self.eat_str_ignore(r"\(").with_err_message("couldn't eat (")
     }
 
     fn eat_close(&mut self) -> Result<(), ParseError> {
-        self.eat_str_ignore(r"\)")
+        self.eat_str_ignore(r"\)").with_err_message("couldn't eat )")
     }
 
-    fn eat_name(&mut self) -> Result<(String, Vec<u8>), ParseError> {
-        let re_name = Regex::new(r"^[a-z][a-z']*").unwrap();
+    fn eat_name(&mut self, metavar: bool) -> Result<(String, Vec<u8>), ParseError> {
+        let re_name = if metavar {
+            Regex::new(r"^[A-Z][A-Z']*").unwrap()
+        } else {
+            Regex::new(r"^[a-z][a-z']*").unwrap()
+        };
         let s = self.s.clone();
         if let Some(name) = re_name.find(&s) {
-            for &(ref on, ref oa) in self.ops {
+            for &(ref on, ref oa) in if metavar { self.metavars } else { self.ops } {
                 if *on == name.as_str() {
                     self.s = re_name.replace(&self.s, "").to_string();
                     self.pos += on.len();
@@ -416,18 +500,21 @@ impl<'a> TermParser<'a> {
                 }
             }
         }
-        Err(self.error())
+        Err(self.error()).with_err_message("could not eat name")
     }
 
     fn eat_argument(&mut self,
+                    require_parentheses: bool,
                     binders: u8,
                     mut vars: HashMap<String, (u8, u8)>,
                     level: u8) -> Result<Term, ParseError> {
-        self.eat_open().or_fail("didn't find `(`");
+        if require_parentheses {
+            self.eat_open().with_err_message("didn't find `(`")?;
+        }
         for i in 0..binders {
             // TODO: Check validity of binders
             vars.insert(self.eat_var()?, (level, i));
-            self.eat_space().or_fail("didn't find space");
+            self.eat_space().with_err_message("didn't find space")?;
         }
         if binders > 0 {
             let eat_arrow = self.eat_str("-> ");
@@ -435,7 +522,7 @@ impl<'a> TermParser<'a> {
                 if Regex::new(&format!("^>")).unwrap().is_match(&self.s) ||
                    Regex::new(&format!("^-")).unwrap().is_match(&self.s) {
                     Err::<(), ParseError>(self.error_hint("you probably meant `->`"))
-                        .or_fail("unexpected symbol `>`");
+                        .with_err_message("unexpected symbol `>`")?;
                 } if let Ok(var) = self.eat_var() {
                     self.pos -= var.len();
                     let err_hint = self.error_hint(
@@ -445,14 +532,17 @@ impl<'a> TermParser<'a> {
                             .as_str()
                     );
                     Err::<(), ParseError>(err_hint)
-                        .or_fail("wrong number of binders for arity");
+                        .with_err_message("wrong number of binders for arity")?;
                 } else {
-                    eat_arrow.or_fail("didn't find arrow");
+                    eat_arrow.with_err_message("didn't find arrow")?;
                 }
             }
         }
-        let op = self.eat_op(vars.clone(), level + 1).or_fail("didn't find op");
-        self.eat_close().or_fail("didn't find `)`");
+        let op = self.eat_op_or_metavar(vars.clone(), level + 1)
+                     .with_err_message("didn't find op")?;
+        if require_parentheses {
+            self.eat_close().with_err_message("didn't find `)`")?;
+        }
         Ok(op)
     }
 
@@ -495,8 +585,11 @@ fn main() {
     let gen_vars: Vec<&str> = vec![
         /* [[INSERT: gen_vars]] */
     ];
+    let metavars: Vec<(&str, Vec<u8>)> = vec![
+        /* [[INSERT: metavars]] */
+    ];
 
-    let coq_gen = CoqGen { name: inferred_name, ops: &ops };
+    let coq_gen = CoqGen { name: inferred_name, ops: &ops, metavars: &metavars };
 
     let check_term = |term: String| {
         let mut term_parser = TermParser {
@@ -504,11 +597,12 @@ fn main() {
             s: term.clone(),
             pos: 0,
             ops: &ops,
+            metavars: &metavars,
         };
         let vars: HashMap<String, (u8, u8)> = gen_vars.iter().enumerate().map(|(i, v)| {
             (v.to_string(), (0, i as u8))
         }).collect();
-        let term = term_parser.eat_op(vars, 0).expect("term was not valid!");
+        let term = term_parser.eat_op_or_metavar(vars, 0).expect("term was not valid!");
         println!("Term was syntactically correct.");
         coq_gen.inductive_term(term)
     };
