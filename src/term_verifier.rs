@@ -209,7 +209,7 @@ impl<'a> CoqGen<'a> {
 
     fn inductive(&self) -> String {
         let code = to_camel_case(self.name);
-        let variants = self.ops.iter().map(|x| {
+        let variants = self.ops.iter().chain(self.metavars.iter()).map(|x| {
             format!("| {} : {}",
                     x.0,
                     iter::repeat(code.clone())
@@ -316,9 +316,9 @@ struct Metavar {
 
 impl Display for Metavar {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}[{}]", self.metavar, self.args.iter().map(|arg| {
-            format!("{}", arg)
-        }).collect::<Vec<_>>().join(", "))
+        write!(f, "{}{}", self.metavar, self.args.iter().map(|arg| {
+            format!(" ({})", arg)
+        }).collect::<Vec<_>>().join(""))
     }
 }
 
