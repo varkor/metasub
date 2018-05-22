@@ -304,7 +304,11 @@ struct Operation {
 impl Display for Operation {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}{}", self.op, self.args.iter().map(|arg| {
-            format!(" ({})", arg)
+            if arg.needs_closure() {
+                format!(" ({})", arg)
+            } else {
+                format!(" {}", arg)
+            }
         }).collect::<Vec<_>>().join(""))
     }
 }
@@ -317,7 +321,11 @@ struct Metavar {
 impl Display for Metavar {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}{}", self.metavar, self.args.iter().map(|arg| {
-            format!(" ({})", arg)
+            if arg.needs_closure() {
+                format!(" ({})", arg)
+            } else {
+                format!(" {}", arg)
+            }
         }).collect::<Vec<_>>().join(""))
     }
 }
@@ -328,12 +336,23 @@ enum Term {
     Metavar(Metavar),
 }
 
+impl Term {
+    fn needs_closure(&self) -> bool {
+        // ...closure inside parentheses, that is.
+        match self {
+            Term::Var(..) => true,
+            Term::Op(op) => !op.args.is_empty(),
+            Term::Metavar(mv) => !mv.args.is_empty(),
+        }
+    }
+}
+
 impl Display for Term {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            &Term::Var(depth, offset) => write!(f, "var {} {}", depth, offset),
-            &Term::Op(ref op) => op.fmt(f),
-            &Term::Metavar(ref mv) => mv.fmt(f),
+            Term::Var(depth, offset) => write!(f, "var {} {}", depth, offset),
+            Term::Op(op) => op.fmt(f),
+            Term::Metavar(mv) => mv.fmt(f),
         }
     }
 }
