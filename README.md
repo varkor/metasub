@@ -1,5 +1,5 @@
 # metasub
-`metasub` is a proof-assistant generator for first-order abstract syntax.
+`metasub` is a prototype proof-assistant generator for second-order abstract syntax.
 
 ## Examples
 ```bash
