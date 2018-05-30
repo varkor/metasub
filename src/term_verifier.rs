@@ -68,6 +68,17 @@ pub struct CoqGen<'a> {
 }
 
 impl<'a> CoqGen<'a> {
+    const ESCAPES: [&'static str; 1] = ["let"];
+
+    pub fn escape_name(name: &String) -> String {
+        for esc in &Self::ESCAPES {
+            if name == esc {
+                return format!("{}'", name);
+            }
+        }
+        name.clone()
+    }
+
     pub fn gen_colimit(&self) -> String {
         format!("{}{}\n{}", self.comment(), self.header(), self.body())
     }
@@ -211,7 +222,7 @@ impl<'a> CoqGen<'a> {
         let code = to_camel_case(self.name);
         let variants = self.ops.iter().chain(self.metavars.iter()).map(|x| {
             format!("| {} : {}",
-                    x.0,
+                    Self::escape_name(&x.0.to_string()),
                     iter::repeat(code.clone())
                          .take(x.1.len() + 1)
                          .collect::<Vec<_>>()
@@ -307,7 +318,7 @@ struct Operation {
 
 impl Display for Operation {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}{}", self.op, self.args.iter().map(|arg| {
+        write!(f, "{}{}", CoqGen::escape_name(&self.op), self.args.iter().map(|arg| {
             if arg.needs_closure() {
                 format!(" ({})", arg)
             } else {
@@ -324,7 +335,7 @@ struct Metavar {
 
 impl Display for Metavar {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}{}", self.metavar, self.args.iter().map(|arg| {
+        write!(f, "{}{}", CoqGen::escape_name(&self.metavar), self.args.iter().map(|arg| {
             if arg.needs_closure() {
                 format!(" ({})", arg)
             } else {
