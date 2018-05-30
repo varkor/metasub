@@ -284,7 +284,11 @@ impl<T> FailParse<T> for Result<T, ParseError> {
     fn with_err_message(self, error: &str) -> Self {
         if let Err(ref pe) = self {
             let mut pe = pe.clone();
-            pe.error = format!("{} | {}", pe.error, error.to_string());
+            if env::var("METASUB_DEBUG").is_err() || pe.error == "<unknown parse error>" {
+                pe.error = error.to_string()
+            } else {
+                pe.error = format!("{} | {}", pe.error, error.to_string());
+            }
             Err::<T, _>(pe)
         } else {
             self
@@ -409,8 +413,9 @@ impl<'a> TermParser<'a> {
         let after_ctx = self.save_context();
         if eaten_op.is_err() {
             self.restore_context(prev_ctx);
-            let eaten_metavar = self.eat_metavar(vars, level);
-            if eaten_metavar.is_ok() {
+            let mut progressed = false;
+            let eaten_metavar = self.eat_metavar(vars, level, &mut progressed);
+            if progressed {
                 return eaten_metavar;
             }
             self.restore_context(after_ctx);
@@ -418,14 +423,24 @@ impl<'a> TermParser<'a> {
         eaten_op
     }
 
-    fn eat_metavar(&mut self, vars: HashMap<String, (u8, u8)>, level: u8)
+    fn eat_metavar(&mut self, vars: HashMap<String, (u8, u8)>, level: u8, progressed: &mut bool)
         -> Result<Term, ParseError> {
         let (name, arity) = self.eat_name(true).with_err_message("couldn't eat metavar name")?;
+        *progressed = true;
         self.eat_str_ignore(r"\[")?;
         let mut args = vec![];
         for (i, &num_binders) in arity.iter().enumerate() {
-            args.push(self.eat_argument(false, num_binders, vars.clone(), level)
-                          .with_err_message("didn't find argument")?);
+            let eat_arg = self.eat_argument(false, num_binders, vars.clone(), level);
+            if eat_arg.is_err() {
+                let err_hint = self.error_hint(
+                    format!("expected {} input{}",
+                        arity.len(),
+                        if arity.len() != 1 { 's'.to_string() } else { String::new() }).as_str()
+                );
+                Err::<(), ParseError>(err_hint).with_err_message("too few inputs for arity")?;
+            }
+            args.push(eat_arg?);
+
             if i < arity.len() - 1 {
                 self.eat_str_ignore(", ")?;
             }
